@@ -17,14 +17,22 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #>
 
 #Requires -RunAsAdministrator
-param ([Switch]$ForceKms38)
+
+Param (
+    [Alias('Key')]
+    [Parameter(Position=0)]
+    $ProvidedKey,
+
+    [Parameter()]
+    [Switch]$ForceKms38
+)
 
 $version = '0.1'
-$kms38forced = $ForceKms38.IsPresent
-$slcwhere = 'ApplicationId=''55c92734-d682-4d71-983e-d6ec3f16059f'' AND PartialProductKey != NULL'
+$kms38_forced = $ForceKms38.IsPresent
+$slc_where = 'ApplicationId=''55c92734-d682-4d71-983e-d6ec3f16059f'' AND PartialProductKey != NULL'
 $required_files = 'gatherosstate.exe', 'slc.dll'
 
-Function GetHwidProductKey($SkuId, $Build) {
+function GetHwidProductKey($SkuId, $Build) {
     $SkuId = [String]$SkuId
 
     $keys = @{
@@ -80,7 +88,7 @@ Function GetHwidProductKey($SkuId, $Build) {
     Return $null
 }
 
-Function GetKms38ProductKey($SkuId, $Build) {
+function GetKms38ProductKey($SkuId, $Build) {
     $SkuId = [String]$SkuId
 
     $keys = @{
@@ -162,7 +170,7 @@ Function GetKms38ProductKey($SkuId, $Build) {
     Return $null
 }
 
-Function StartServices {
+function StartServices {
     $services = 'sppsvc', 'ClipSVC', 'wlidsvc'
     foreach($service in $services) {
         $svc = (Get-Service -Name $service -ErrorAction Stop)
@@ -173,29 +181,44 @@ Function StartServices {
     }
 }
 
-Function InstallProductKey($Key) {
-    Return Invoke-CimMethod -Query 'SELECT * FROM SoftwareLicensingService' `
+function InstallProductKey($Key) {
+    Return Invoke-CimMethod -Query 'SELECT Version FROM SoftwareLicensingService' `
         -MethodName 'InstallProductKey' -Arguments @{ProductKey=$Key} `
         -ErrorAction Stop
 }
 
-Function SetKMS38Machine {
-    $query = "SELECT ID FROM SoftwareLicensingProduct WHERE $slcwhere"
+function GetProductKeyChannel {
+    $query = "SELECT ProductKeyChannel FROM SoftwareLicensingProduct WHERE $slc_where"
+
+    try {
+        Return [String](Get-CimInstance -Query $query -ErrorAction Stop).ProductKeyChannel
+    } catch {
+        Return "Unknown"
+    }
+}
+
+function SetKMS38Machine {
+    $query = "SELECT ID FROM SoftwareLicensingProduct WHERE $slc_where"
 
     Return Invoke-CimMethod -Query $query `
         -MethodName 'SetKeyManagementServiceMachine' `
         -Arguments @{MachineName='127.0.0.1'} -ErrorAction Stop
 }
 
-Function ActivateProduct {
-    $query = "SELECT ID FROM SoftwareLicensingProduct WHERE $slcwhere"
+function RefreshLicenseStatus {
+    Return Invoke-CimMethod -Query 'SELECT Version FROM SoftwareLicensingService' `
+        -MethodName 'RefreshLicenseStatus' -ErrorAction Stop
+}
+
+function ActivateProduct {
+    $query = "SELECT ID FROM SoftwareLicensingProduct WHERE $slc_where"
 
     Return Invoke-CimMethod -Query $query `
         -MethodName 'Activate' -ErrorAction Stop
 }
 
-Function GetLicenseStatus {
-    $query = "SELECT LicenseStatus FROM SoftwareLicensingProduct WHERE $slcwhere"
+function GetLicenseStatus {
+    $query = "SELECT LicenseStatus FROM SoftwareLicensingProduct WHERE $slc_where"
 
     try {
         Return [int](Get-CimInstance -Query $query -ErrorAction Stop).LicenseStatus
@@ -204,17 +227,17 @@ Function GetLicenseStatus {
     }
 }
 
-Function Cleanup {
+function Cleanup {
     $clanup_files = 'gatherosstatemodified.exe', 'GenuineTicket.xml'
 
     foreach($file in $clanup_files) {
-        if((Test-Path -Path "$PSScriptRoot\$file") -eq $true) {
-            Remove-Item -Path "$PSScriptRoot\$file" -Force
+        if((Test-Path -Path $file) -eq $true) {
+            Remove-Item -Path $file -Force
         }
     }
 }
 
-Function CleanupAndExit {
+function CleanupAndExit {
     Cleanup
     Pop-Location
     Exit $args[0]
@@ -225,7 +248,7 @@ Push-Location -Path $PSScriptRoot
 foreach($file in $required_files) {
     if((Test-Path -Path "$PSScriptRoot\$file") -eq $false) {
         Write-Error "Required file $file is missing"
-        CleanupAndExit 1
+        CleanupAndExit 0x80070002
     }
 }
 
@@ -238,7 +261,7 @@ $build = $os.BuildNumber
 
 if($build -lt 10240) {
     Write-Error 'This script requires Windows build greater than or equal to 10240'
-    CleanupAndExit 1
+    CleanupAndExit 0x8007000a
 }
 
 Cleanup
@@ -251,18 +274,21 @@ https://github.com/Gamers-Against-Weed/nt10RentFree
 
 "@ -ForegroundColor Yellow -BackgroundColor Black
 
-if($kms38forced -eq $false) {
+if($null -ne $ProvidedKey) {
+    $key = $ProvidedKey
+}
+
+if(($null -eq $key) -and ($kms38_forced -eq $false)) {
     $key = GetHwidProductKey -SkuId $sku -Build $build
 }
 
 if($null -eq $key) {
     $key = GetKms38ProductKey -SkuId $sku -Build $build
-    $kms38 = $true
 }
 
 if($null -eq $key) {
     Write-Error 'Installed edition is not supported'
-    CleanupAndExit 1
+    CleanupAndExit 0x8007000a
 }
 
 Write-Host 'Checking required services...'
@@ -271,7 +297,7 @@ try {
     StartServices
 } catch {
     Write-Error $_
-    CleanupAndExit 1
+    CleanupAndExit 0x8007042c
 }
 
 Write-Host 'Done.' -ForegroundColor Cyan -BackgroundColor Black
@@ -283,7 +309,11 @@ try {
     $null = InstallProductKey -Key $key
 } catch {
     Write-Error $_
-    CleanupAndExit 1
+    CleanupAndExit 0x8007054f
+}
+
+if((GetProductKeyChannel) -eq "Volume:GVLK") {
+    $kms38 = $true
 }
 
 Write-Host 'Done.' -ForegroundColor Cyan -BackgroundColor Black
@@ -296,7 +326,7 @@ if($kms38 -eq $true) {
         $null = SetKMS38Machine
     } catch {
         Write-Error $_
-        CleanupAndExit 1
+        CleanupAndExit 0x8007054f
     }
 
     Write-Host 'Done.' -ForegroundColor Cyan -BackgroundColor Black
@@ -311,7 +341,7 @@ $patch = Start-Process -FilePath 'rundll32.exe' `
 Wait-Process -Id $patch.Id
 if(($patch.ExitCode -ne 0) -or ((Test-Path "gatherosstatemodified.exe") -eq $false)) {
     Write-Error 'Failed to patch gatherosstate.exe'
-    CleanupAndExit 1
+    CleanupAndExit 0x8007054f
 }
 
 Write-Host 'Done.' -ForegroundColor Cyan -BackgroundColor Black
@@ -323,19 +353,24 @@ $gos = Start-Process -FilePath "gatherosstatemodified.exe" -PassThru
 Wait-Process -Id $gos.Id
 if(($gos.ExitCode -ne 0) -or ((Test-Path "GenuineTicket.xml") -eq $false)) {
     Write-Error 'Failed to generate GenuineTicket.xml'
-    CleanupAndExit $gos.ExitCode
+
+    if($gos.ExitCode -ne 0) {
+        CleanupAndExit $gos.ExitCode
+    } else {
+        CleanupAndExit 0x8007054f
+    }
 }
 
 Write-Host 'Done.' -ForegroundColor Cyan -BackgroundColor Black
 Write-Host
 
 try {
-    Copy-Item -Path "$PSScriptRoot\GenuineTicket.xml" `
+    Copy-Item -Path "GenuineTicket.xml" `
         -Destination "${Env:ALLUSERSPROFILE}\Microsoft\Windows\ClipSVC\GenuineTicket" `
         -Force -ErrorAction Stop
 } catch {
     Write-Error $_
-    CleanupAndExit 1
+    CleanupAndExit 0x80070005
 }
 
 Write-Host 'Applying GenuineTicket.xml...'
@@ -343,7 +378,7 @@ Write-Host 'Applying GenuineTicket.xml...'
 ClipUp.exe -o
 if($LASTEXITCODE -ne 0) {
     Write-Error 'Failed to apply GenuineTicket.xml'
-    CleanupAndExit 1
+    CleanupAndExit 0x8007054f
 }
 
 Write-Host 'Done.' -ForegroundColor Cyan -BackgroundColor Black
@@ -353,16 +388,17 @@ if($kms38 -eq $false) {
     Write-Host 'Activating Windows...'
 
     try {
+        $null = RefreshLicenseStatus
         $null = ActivateProduct
     } catch {
         Write-Error $_
-        CleanupAndExit 1
+        CleanupAndExit 0x8007054f
     }
 }
 
 if((GetLicenseStatus) -ne 1) {
     Write-Error 'Failed to activate Windows'
-    CleanupAndExit 1
+    CleanupAndExit 0x8007054f
 }
 
 Write-Host 'Sucessfully activated Windows!' -ForegroundColor Green -BackgroundColor Black
