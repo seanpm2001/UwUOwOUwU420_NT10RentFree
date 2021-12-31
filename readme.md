@@ -22,6 +22,9 @@ ISHYGDDT
 
 Use proper KMS solution like [KMS\_VL\_ALL](https://github.com/abbodi1406/KMS_VL_ALL_AIO) or [network wide KMS](https://forums.mydigitallife.net/threads/50234/). But if you need to, `nt10RentFree.ps1 -ForceKms38`.
 
+### I want to use a custom key/I want to use this on an unsupported edition
+Run `nt10RentFree.ps1 -Key XXXXX-XXXXX-XXXXX-XXXXX-XXXXX`.
+
 slc.dll source code
 -------------------
 Source code of the slc.dll can be found [here](https://github.com/Gamers-Against-Weed/Integrated_Patcher_3).
